@@ -41,6 +41,22 @@ python scripts/radius_dispatch.py scout \
 # 或者临时传：--key 你的key（脚本绝不落盘、不写进产物）
 ```
 
+### 按车程时间画范围（等时圈，需高德 key）
+
+半径画的是「距离范围」，等时圈画的是「时间范围」——比如「虎门站出发驾车 20 分钟能到哪」。
+实测 20 分钟往东南沿高速能跑 13km，往西在镇上只能走 2km，形状反映真实道路可达性：
+
+```bash
+python scripts/radius_dispatch.py isochrone \
+  --origin "虎门站" --city 东莞 --minutes 20 --directions 16
+```
+
+参数：`--minutes` 驾车分钟数、`--directions` 方向采样数（越多样条越圆滑、请求翻倍）、
+`--max-dist` 二分上界、`--iterations` 二分精度、`--lat/--lon` 直接给原点。
+原理：高德无公开免费等时圈 API，但个人 key 可调驾车路径规划——从原点向 N 个方向
+各做二分搜索找「恰好 minutes 分钟可达的最远点」，边界连成多边形即近似等时圈。
+产物：`isochrone.geojson` + `isochrone-map.html`。
+
 ### scout 参数
 
 | 参数 | 说明 | 默认 |

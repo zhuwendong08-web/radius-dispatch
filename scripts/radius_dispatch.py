@@ -59,7 +59,7 @@ import urllib.error
 # 让 radius_dispatch.py 能 import 同目录的 providers.py（无论从哪启动）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    from providers import AmapProvider
+    from providers import AmapProvider, wgs84_to_gcj02
 except ImportError:  # providers.py 缺失时仍可跑纯 OSM 流程
     AmapProvider = None
 
@@ -1107,6 +1107,149 @@ def cmd_scout(args):
     return 0
 
 
+# ----------------------------------------------------------------------------
+# isochrone：按「N 分钟车程」画范围（等时圈）
+# 高德没有公开免费的等时圈多边形 API（要商业授权），但个人 key 可调驾车路径规划，
+# 故用「方向采样 + 二分搜索」DIY：从原点向 N 个方向各找「恰好 minutes 分钟可达的最远点」，
+# 边界点连成多边形即近似等时圈。驾驶路线沿道路延伸，形状自然反映高速/高架走向。
+# ----------------------------------------------------------------------------
+def _point_at(lat, lon, bearing_deg, dist_m):
+    """从 (lat,lon) 沿方位角(度，0=北，顺时针) 走 dist_m 的目标点（WGS84 球面近似）"""
+    ang = math.radians(bearing_deg)
+    d = dist_m / EARTH_R
+    lat1, lon1 = math.radians(lat), math.radians(lon)
+    lat2 = math.asin(math.sin(lat1) * math.cos(d)
+                     + math.cos(lat1) * math.sin(d) * math.cos(ang))
+    lon2 = lon1 + math.atan2(math.sin(ang) * math.sin(d) * math.cos(lat1),
+                             math.cos(d) - math.sin(lat1) * math.sin(lat2))
+    return math.degrees(lat2), math.degrees(lon2)
+
+
+def _drive_minutes(amap, o_lat, o_lon, d_lat, d_lon):
+    """两点驾车时间（分钟）。内部 WGS84，进出高德边界转 GCJ02。失败返回 None。"""
+    og = wgs84_to_gcj02(o_lon, o_lat)
+    dg = wgs84_to_gcj02(d_lon, d_lat)
+    try:
+        r = amap._get("/v3/direction/driving", {
+            "origin": f"{og[0]:.6f},{og[1]:.6f}",
+            "destination": f"{dg[0]:.6f},{dg[1]:.6f}"})
+        paths = r.get("route", {}).get("paths", []) or []
+        if not paths:
+            return None
+        return float(paths[0].get("duration", 0)) / 60.0
+    except Exception:
+        return None
+
+
+def _isochrone_boundary(amap, lat, lon, bearing, minutes,
+                        max_dist=60000, iters=10):
+    """沿一个方向二分「恰好 minutes 分钟可达的最远距离」，返回边界点 (lat, lon)。
+    先探测上界（不足则翻倍扩），再迭代收敛。"""
+    lo, hi = 0.0, float(max_dist)
+    for _ in range(3):                       # 上界探测：不够远就翻倍
+        d = _drive_minutes(amap, lat, lon, *_point_at(lat, lon, bearing, hi))
+        if d is None or d >= minutes:
+            break
+        hi *= 2
+    for _ in range(iters):
+        mid = (lo + hi) / 2
+        d = _drive_minutes(amap, lat, lon, *_point_at(lat, lon, bearing, mid))
+        if d is None:
+            hi = mid                          # 算路失败按超时收缩，保守
+        elif d <= minutes:
+            lo = mid
+        else:
+            hi = mid
+    return _point_at(lat, lon, bearing, lo)
+
+
+def write_isochrone_map(path, origin, minutes, pts):
+    """Leaflet 地图：等时圈多边形 + 原点"""
+    ring = [[round(x[1], 6), round(x[0], 6)] for x in pts]   # (lat,lon)->[lon,lat]
+    html = """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>radius-dispatch 等时圈</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>html,body,#map{height:100%;margin:0;font-family:sans-serif}</style>
+</head><body><div id="map"></div><script>
+var map=L.map('map').setView([__LAT__,__LON__],12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,
+ attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+var ring=__RING__;
+L.polygon(ring,{color:'#dc2626',weight:2,fillColor:'#ef4444',fillOpacity:0.18}).addTo(map);
+L.marker([__LAT__,__LON__]).addTo(map)
+ .bindPopup('<b>__ORIGIN__</b><br>__MINUTES__ 分钟车程范围').openPopup();
+map.fitBounds(L.latLngBounds(ring));
+</script></body></html>"""
+    html = (html.replace("__LAT__", f"{origin['lat']:.6f}")
+                .replace("__LON__", f"{origin['lon']:.6f}")
+                .replace("__RING__", json.dumps(ring))
+                .replace("__ORIGIN__", origin["name"].replace("'", "\\'"))
+                .replace("__MINUTES__", str(minutes)))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+
+def cmd_isochrone(args):
+    """按驾车分钟数画范围：方向采样 + 二分，输出等时圈 GeoJSON + 地图"""
+    provider, amap = _resolve_provider(args)
+    if provider is None:
+        return 1
+    if amap is None:
+        print("错误：等时圈依赖高德驾车路径规划，需要 --key 或环境变量 AMAP_KEY。")
+        return 1
+    print(f"[数据源] 高德(AMAP) 驾车路径规划")
+
+    # 1) 原点
+    if args.lat is not None and args.lon is not None:
+        origin = {"name": f"{args.lat},{args.lon}", "lat": args.lat, "lon": args.lon}
+    else:
+        if not args.origin:
+            print("需要 --origin 或 --lat/--lon")
+            return 1
+        hits = amap.geocode(args.origin, args.city)
+        if not hits:
+            print(f"原点解析失败：{args.origin}")
+            return 1
+        origin = {"name": hits[0]["name"], "lat": hits[0]["lat"], "lon": hits[0]["lon"]}
+    print(f"[1/3] 原点：{origin['name']}（{origin['lat']:.6f}, {origin['lon']:.6f}）")
+    print(f"      目标：驾车 {args.minutes} 分钟范围（{args.directions} 方向二分）")
+
+    # 2) 各方向求边界点
+    pts = []
+    for i in range(args.directions):
+        bearing = 360.0 * i / args.directions
+        p = _isochrone_boundary(amap, origin["lat"], origin["lon"], bearing,
+                                args.minutes, args.max_dist, args.iterations)
+        dist = haversine(origin["lat"], origin["lon"], p[0], p[1])
+        pts.append(p)
+        if args.verbose or i == 0 or i == args.directions - 1:
+            print(f"      方向 {bearing:>5.1f}°  可达 {dist:>6.0f} m")
+        time.sleep(0.05)   # 不额外 sleep，_get 自带全局节流
+
+    # 3) 出产物
+    os.makedirs(args.out_dir, exist_ok=True)
+    ring = [[round(x[1], 6), round(x[0], 6)] for x in pts]
+    ring.append(ring[0])
+    gj = {"type": "FeatureCollection", "features": [{
+        "type": "Feature",
+        "properties": {"name": f"isochrone-{args.minutes}min",
+                       "origin": origin["name"], "minutes": args.minutes,
+                       "mode": "driving"},
+        "geometry": {"type": "Polygon", "coordinates": [ring]}}, {
+        "type": "Feature", "properties": {"name": origin["name"], "role": "origin"},
+        "geometry": {"type": "Point",
+                     "coordinates": [origin["lon"], origin["lat"]]}}]}
+    geo_path = os.path.join(args.out_dir, "isochrone.geojson")
+    with open(geo_path, "w", encoding="utf-8") as f:
+        json.dump(gj, f, ensure_ascii=False, indent=2)
+    map_path = os.path.join(args.out_dir, "isochrone-map.html")
+    write_isochrone_map(map_path, origin, args.minutes, pts)
+    print(f"\n[3/3] 等时圈已生成：\n  {geo_path}\n  {map_path}")
+    return 0
+
+
 def main():
     p = argparse.ArgumentParser(
         prog="radius_dispatch.py",
@@ -1121,6 +1264,26 @@ def main():
     g.add_argument("--country", default="cn",
                    help="国家码过滤，默认 cn（中国大陆）；传空串 '' 关闭过滤")
     g.set_defaults(func=cmd_geocode)
+
+    i = sub.add_parser("isochrone", help="按驾车分钟数画范围（等时圈，需高德 key）")
+    i.add_argument("--origin", default=None, help="原点名称（地铁站/地名/地址）")
+    i.add_argument("--city", default=None, help="城市名，消歧用")
+    i.add_argument("--lat", type=float, default=None)
+    i.add_argument("--lon", type=float, default=None)
+    i.add_argument("--minutes", type=int, default=20, help="驾车分钟数，默认 20")
+    i.add_argument("--directions", type=int, default=16,
+                   help="方向采样数，默认 16（越多越圆滑，请求量随之翻倍）")
+    i.add_argument("--max-dist", type=int, default=60000,
+                   help="单方向二分上界（米），默认 60000；不足会自动翻倍")
+    i.add_argument("--iterations", type=int, default=10,
+                   help="每方向二分迭代次数，默认 10（精度 ~max_dist/2^iters）")
+    i.add_argument("--out-dir", default="./radius-dispatch-out", help="产物输出目录")
+    i.add_argument("--provider", default="auto", choices=["auto", "amap"],
+                   help="等时圈依赖驾车规划，只支持高德；默认 auto")
+    i.add_argument("--key", default=None,
+                   help="高德 Web 服务 key；不传则读环境变量 AMAP_KEY")
+    i.add_argument("--verbose", action="store_true", help="打印每方向可达距离")
+    i.set_defaults(func=cmd_isochrone)
 
     s = sub.add_parser("scout", help="完整流水线：画范围 → 捞 POI → 过滤打分 → 清单")
     s.add_argument("--origin", default=None, help="原点名称（地铁站/地名/地址）")

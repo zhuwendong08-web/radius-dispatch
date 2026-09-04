@@ -42,6 +42,17 @@ python scripts/radius_dispatch.py scout \
 
 `--provider auto` 是默认值：检测到 key 走高德，否则回退 OSM。可强制 `--provider osm` / `--provider amap`。
 
+### 等时圈：按驾车分钟数画范围（需高德 key）
+
+半径画「距离范围」，等时圈画「时间范围」——「虎门站出发驾车 20 分钟能到哪」：
+
+```bash
+python scripts/radius_dispatch.py isochrone \
+  --origin "虎门站" --city 东莞 --minutes 20 --directions 16
+```
+
+高德无免费等时圈 API，但个人 key 可调驾车路径规划：向 N 个方向二分「恰好 N 分钟可达的最远点」，边界连成多边形。产物 `isochrone.geojson` + `isochrone-map.html`。
+
 ## 数据源
 
 | 数据源 | 说明 | 适用 |
