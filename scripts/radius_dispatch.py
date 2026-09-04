@@ -981,7 +981,8 @@ def cmd_scout(args):
             bearing = 360.0 * i / args.iso_directions
             iso_pts.append(_isochrone_boundary(
                 amap, origin["lat"], origin["lon"], bearing,
-                args.isochrone_minutes, args.iso_max_dist, args.iso_iterations))
+                args.isochrone_minutes, "driving",
+                args.iso_max_dist, args.iso_iterations))
         dmax = max(haversine(origin["lat"], origin["lon"], p[0], p[1])
                    for p in iso_pts)
         radius = int(dmax * 1.2 + 1000)          # 外接圆做检索，多边形做过滤
@@ -1187,12 +1188,14 @@ def _point_at(lat, lon, bearing_deg, dist_m):
     return math.degrees(lat2), math.degrees(lon2)
 
 
-def _drive_minutes(amap, o_lat, o_lon, d_lat, d_lon):
-    """两点驾车时间（分钟）。内部 WGS84，进出高德边界转 GCJ02。失败返回 None。"""
+def _travel_minutes(amap, mode, o_lat, o_lon, d_lat, d_lon):
+    """两点出行时间（分钟）。mode: driving=驾车 / walking=步行。
+    内部 WGS84，进出高德边界转 GCJ02。失败返回 None。"""
+    path = "/v3/direction/walking" if mode == "walking" else "/v3/direction/driving"
     og = wgs84_to_gcj02(o_lon, o_lat)
     dg = wgs84_to_gcj02(d_lon, d_lat)
     try:
-        r = amap._get("/v3/direction/driving", {
+        r = amap._get(path, {
             "origin": f"{og[0]:.6f},{og[1]:.6f}",
             "destination": f"{dg[0]:.6f},{dg[1]:.6f}"})
         paths = r.get("route", {}).get("paths", []) or []
@@ -1203,19 +1206,21 @@ def _drive_minutes(amap, o_lat, o_lon, d_lat, d_lon):
         return None
 
 
-def _isochrone_boundary(amap, lat, lon, bearing, minutes,
+def _isochrone_boundary(amap, lat, lon, bearing, minutes, mode="driving",
                         max_dist=60000, iters=10):
     """沿一个方向二分「恰好 minutes 分钟可达的最远距离」，返回边界点 (lat, lon)。
-    先探测上界（不足则翻倍扩），再迭代收敛。"""
+    先探测上界（不足则翻倍扩），再迭代收敛。mode: driving / walking。"""
     lo, hi = 0.0, float(max_dist)
     for _ in range(3):                       # 上界探测：不够远就翻倍
-        d = _drive_minutes(amap, lat, lon, *_point_at(lat, lon, bearing, hi))
+        d = _travel_minutes(amap, mode, lat, lon,
+                            *_point_at(lat, lon, bearing, hi))
         if d is None or d >= minutes:
             break
         hi *= 2
     for _ in range(iters):
         mid = (lo + hi) / 2
-        d = _drive_minutes(amap, lat, lon, *_point_at(lat, lon, bearing, mid))
+        d = _travel_minutes(amap, mode, lat, lon,
+                            *_point_at(lat, lon, bearing, mid))
         if d is None:
             hi = mid                          # 算路失败按超时收缩，保守
         elif d <= minutes:
@@ -1286,14 +1291,16 @@ map.fitBounds(L.latLngBounds(ring));
 
 
 def cmd_isochrone(args):
-    """按驾车分钟数画范围：方向采样 + 二分，输出等时圈 GeoJSON + 地图"""
+    """按出行分钟数画范围（驾车/步行）：方向采样 + 二分，输出等时圈 GeoJSON + 地图"""
+    mode = getattr(args, "mode", "driving")
+    mode_cn = "驾车" if mode == "driving" else "步行"
     provider, amap = _resolve_provider(args)
     if provider is None:
         return 1
     if amap is None:
-        print("错误：等时圈依赖高德驾车路径规划，需要 --key 或环境变量 AMAP_KEY。")
+        print("错误：等时圈依赖高德路径规划，需要 --key 或环境变量 AMAP_KEY。")
         return 1
-    print(f"[数据源] 高德(AMAP) 驾车路径规划")
+    print(f"[数据源] 高德(AMAP) {mode_cn}路径规划")
 
     # 1) 原点
     if args.lat is not None and args.lon is not None:
@@ -1308,39 +1315,43 @@ def cmd_isochrone(args):
             return 1
         origin = {"name": hits[0]["name"], "lat": hits[0]["lat"], "lon": hits[0]["lon"]}
     print(f"[1/3] 原点：{origin['name']}（{origin['lat']:.6f}, {origin['lon']:.6f}）")
-    print(f"      目标：驾车 {args.minutes} 分钟范围（{args.directions} 方向二分）")
+    # 步行范围小，二分上界给 15km 足够且省无效探测
+    max_dist = args.max_dist
+    if mode == "walking" and args.max_dist >= 60000:
+        max_dist = 15000
+    print(f"      目标：{mode_cn} {args.minutes} 分钟范围（{args.directions} 方向二分）")
 
     # 2) 各方向求边界点
     pts = []
     for i in range(args.directions):
         bearing = 360.0 * i / args.directions
         p = _isochrone_boundary(amap, origin["lat"], origin["lon"], bearing,
-                                args.minutes, args.max_dist, args.iterations)
+                                args.minutes, mode, max_dist, args.iterations)
         dist = haversine(origin["lat"], origin["lon"], p[0], p[1])
         pts.append(p)
         if args.verbose or i == 0 or i == args.directions - 1:
             print(f"      方向 {bearing:>5.1f}°  可达 {dist:>6.0f} m")
         time.sleep(0.05)   # 不额外 sleep，_get 自带全局节流
 
-    # 3) 出产物
+    # 3) 出产物（文件名带 mode，避免驾车/步行同名覆盖）
     os.makedirs(args.out_dir, exist_ok=True)
     ring = [[round(x[1], 6), round(x[0], 6)] for x in pts]
     ring.append(ring[0])
     gj = {"type": "FeatureCollection", "features": [{
         "type": "Feature",
-        "properties": {"name": f"isochrone-{args.minutes}min",
+        "properties": {"name": f"isochrone-{args.minutes}min-{mode}",
                        "origin": origin["name"], "minutes": args.minutes,
-                       "mode": "driving"},
+                       "mode": mode},
         "geometry": {"type": "Polygon", "coordinates": [ring]}}, {
         "type": "Feature", "properties": {"name": origin["name"], "role": "origin"},
         "geometry": {"type": "Point",
                      "coordinates": [origin["lon"], origin["lat"]]}}]}
-    geo_path = os.path.join(args.out_dir, "isochrone.geojson")
+    geo_path = os.path.join(args.out_dir, f"isochrone-{mode}.geojson")
     with open(geo_path, "w", encoding="utf-8") as f:
         json.dump(gj, f, ensure_ascii=False, indent=2)
-    map_path = os.path.join(args.out_dir, "isochrone-map.html")
+    map_path = os.path.join(args.out_dir, f"isochrone-{mode}-map.html")
     write_isochrone_map(map_path, origin, args.minutes, pts)
-    print(f"\n[3/3] 等时圈已生成：\n  {geo_path}\n  {map_path}")
+    print(f"\n[3/3] {mode_cn}等时圈已生成：\n  {geo_path}\n  {map_path}")
     return 0
 
 
@@ -1367,6 +1378,8 @@ def main():
     i.add_argument("--lat", type=float, default=None)
     i.add_argument("--lon", type=float, default=None)
     i.add_argument("--minutes", type=int, default=20, help="驾车分钟数，默认 20")
+    i.add_argument("--mode", default="driving", choices=["driving", "walking"],
+                   help="出行方式：driving=驾车 / walking=步行（步行默认上界 15km）")
     i.add_argument("--directions", type=int, default=16,
                    help="方向采样数，默认 16（越多越圆滑，请求量随之翻倍）")
     i.add_argument("--max-dist", type=int, default=60000,
