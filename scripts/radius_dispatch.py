@@ -110,21 +110,27 @@ BUSINESS_TYPES = {
         #   「小满营地烧烤.采摘.团建」这种名字比任何类型推断都准。
         # 名称信号优先于类目信号（名字直接写用途 > 平台归档的类目）。
         "suitability": {
-            # 强意图：名字里直接写了就是干这个的
+            # 强意图：名字里直接写了就是干这个的。
+            # 注意「烧烤/采摘/钓虾」等不能单独算强信号——它们是营地的「项目」，
+            # 不是场地本身。「XX烧烤王」「XX羊肉烧烤」是烧烤店，不是团建场地。
+            # 它们与营地类词（营地/团建/农庄等）同现时，营地词会先命中返回高分；
+            # 单独出现时落到 weak 层低分。实测把「烧烤」放 strong 会让纯烧烤店混进前排。
             "strong": {"团建": 95, "拓展": 95, "拓展基地": 98, "轰趴": 90,
                        "真人CS": 92, "CS": 90, "营地": 88, "露营": 85,
-                       "烧烤": 82, "采摘": 80, "户外": 78},
+                       "户外": 78},
             # 中等意图：场地类型对（有大片空地，能装下 200 人），但没明说用途
             "medium": {"生态园": 88, "农庄": 85, "山庄": 85, "农家乐": 85,
                        "庄园": 82, "农场": 82, "度假": 80, "度假村": 82,
-                       "乐园": 72, "会议中心": 78, "宴会厅": 70, "活动中心": 70},
+                       "乐园": 72, "会议中心": 78, "宴会厅": 70, "活动中心": 70,
+                       "烧烤乐园": 80, "采摘园": 78, "垂钓园": 70, "钓虾": 68},
             # 负向：是运动/休闲场地，但装不下 200~300 人（容量不符，非用途不符）
             #   实测这批是最大的"高分噪声"——篮球场/游泳馆/健身中心离地铁近，
             #   交通分顶格，若无此层会霸占前排，把真正的农庄挤下去。
             "weak": {"球场": 30, "篮球": 25, "网球": 25, "足球": 30,
                      "羽毛球": 30, "乒乓球": 25, "游泳": 30, "健身": 25,
                      "台球": 25, "瑜伽": 25, "舞蹈": 30, "跆拳道": 25,
-                     "武馆": 30, "溜冰": 25},
+                     "武馆": 30, "溜冰": 25, "烧烤": 30, "采摘": 32,
+                     "钓虾": 30, "垂钓": 30},
             # 类目兜底（高德中文类目）。数值同样反映容量，不只看用途。
             "category": {"综合体育馆": 80, "会展中心": 85, "展览馆": 80,
                          "体育休闲服务场所": 70, "运动场所": 65, "休闲场所": 62,
@@ -527,7 +533,7 @@ def parse_transit(elements):
 # 3) 富化 / 打分
 # ----------------------------------------------------------------------------
 def enrich(cands, transits, origin):
-    """补：到原点距离、最近交通站点及距离"""
+    """补：到原点距离、最近交通站点及距离（直线）。后续可被步行路网距离覆盖。"""
     for c in cands:
         c["dist_to_origin_m"] = round(haversine(origin["lat"], origin["lon"],
                                                 c["lat"], c["lon"]), 1)
@@ -535,16 +541,57 @@ def enrich(cands, transits, origin):
         for t in transits:
             d = haversine(c["lat"], c["lon"], t["lat"], t["lon"])
             if best is None or d < best[1]:
-                best = (t["name"], d, t["type"])
+                # 存 (name, 直线距离, type, lat, lon)，坐标供后续步行算路用
+                best = (t["name"], d, t["type"], t["lat"], t["lon"])
         if best:
             c["nearest_transit"] = best[0]
-            c["transit_dist_m"] = round(best[1], 1)
+            c["transit_dist_m"] = round(best[1], 1)   # 直线距离（初始）
             c["nearest_transit_type"] = best[2]
+            c["nearest_lat"] = best[3]
+            c["nearest_lon"] = best[4]
+            c["transit_mode"] = "line"                # line=直线 / walk=步行路网
         else:
             c["nearest_transit"] = ""
             c["transit_dist_m"] = None
             c["nearest_transit_type"] = ""
+            c["transit_mode"] = "line"
     return cands
+
+
+def compute_walk_distances(cands, amap):
+    """
+    把「到最近站点」的直线距离升级为真实步行路网距离（仅高德数据源）。
+    逐个调用步行路径规划 API；成功则覆盖 transit_dist_m（原直线存入 line_dist_m），
+    失败保留直线并标记。调用方需已对通过硬约束的候选过滤，避免浪费配额。
+    返回 (成功数, 失败数)。
+    """
+    n_ok = n_fail = 0
+    for c in cands:
+        if c["transit_dist_m"] is None:
+            continue
+        d = _route_retry(amap, c)
+        if d is not None and d > 0:
+            c["line_dist_m"] = c["transit_dist_m"]   # 保留直线，供对照
+            c["transit_dist_m"] = round(d, 1)
+            c["transit_mode"] = "walk"
+            n_ok += 1
+        else:
+            c["walk_fail"] = True                    # score 阶段转成 flags
+            n_fail += 1
+    return n_ok, n_fail
+
+
+def _route_retry(amap, c, _try=0):
+    """单次步行算路，失败延迟重试一次（实测失败多为 QPS 限流，重试能救回大半）。"""
+    try:
+        return amap.route_distance(
+            (c["lat"], c["lon"]),
+            (c["nearest_lat"], c["nearest_lon"]))
+    except Exception:
+        if _try < 1:
+            time.sleep(1.5)                          # 避让限流窗口
+            return _route_retry(amap, c, _try + 1)
+        return None
 
 
 def capacity_proxy(proxy_map, kind):
@@ -652,6 +699,9 @@ def score_candidates(cands, cfg, max_transit, target_capacity, full_score_area):
         suit_s, suit_flags = suitability_score(
             cfg.get("suitability"), c.get("name", ""), c.get("kind", ""))
         flags.extend(suit_flags)
+        # 步行算路失败的候选：距离按直线计，提示用户该距离偏乐观
+        if c.get("walk_fail"):
+            flags.append("步行算路失败，按直线距离计(偏乐观)")
 
         w_suit = w.get("suitability", 0.0)
         total = (w["transit"] * transit_s + w_suit * suit_s
@@ -688,7 +738,8 @@ def write_report(path, meta, rows, filtered_out):
     lines.append(f"- 原点：**{meta['origin_name']}**（{meta['lat']:.6f}, {meta['lon']:.6f}）")
     lines.append(f"- 半径：**{meta['radius']} m**（圆形范围，已输出 GeoJSON / 地图）")
     lines.append(f"- 业务类型：**{meta['type_label']}** — {meta['type_summary']}")
-    lines.append(f"- 交通硬约束：候选点到最近交通站点 ≤ **{meta['max_transit']} m**（直线距离）")
+    lines.append(f"- 交通硬约束：候选点到最近交通站点 ≤ **{meta['max_transit']} m**"
+                 f"（{meta.get('transit_note', '直线距离')}）")
     if meta["target_capacity"]:
         lines.append(f"- 目标容量：**{meta['target_capacity']} 人**")
     lines.append(f"- 检索到候选 **{meta['total']}** 个，通过硬约束 **{meta['passed']}** 个\n")
@@ -711,9 +762,12 @@ def write_report(path, meta, rows, filtered_out):
             td = r["transit_dist_m"] if r["transit_dist_m"] is not None else "—"
             lines.append(f"| {r['name']} | {td} | {r['score']} |")
     lines.append("\n## 已知缺陷\n")
-    lines.append("1. 交通距离是直线距离，非步行路网距离；需真实可达性请接路径规划 API。")
-    lines.append("2. OSM 中国场地 POI 覆盖有限，团建类场地（拓展基地/轰趴馆/农庄）常搜不到。")
-    lines.append("3. 容量字段在 OSM 极少标注，多数候选项为「未知」并按中性分处理。\n")
+    if meta.get("transit_note", "") == "真实步行路网距离":
+        lines.append("1. 交通距离为**真实步行路网距离**（高德步行路径规划）；算路失败的候选回退直线并已标注。")
+    else:
+        lines.append("1. 交通距离是直线距离，非步行路网距离；高德数据源加 `--provider amap`（去掉 `--no-walk`）即为真实步行距离。")
+    lines.append("2. OSM 中国场地 POI 覆盖有限，团建类场地（拓展基地/轰趴馆/农庄）常搜不到，建议高德数据源。")
+    lines.append("3. 面积/容量两数据源均极少标注（高德不返回），多数候选项为「未知」并按类型推断/中性分处理，须人工核实。\n")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
@@ -964,6 +1018,23 @@ def cmd_scout(args):
         print(f"      找到 {len(transits)} 个交通站点")
     cands = enrich(cands, transits, origin)
 
+    # 4.5) 高德：把「到站点」距离从直线升级为真实步行路网距离。
+    # 只对直线 <= max_transit 的候选算（步行 >= 直线，直线已超的必被淘汰，省配额）。
+    # 步行距离会重新判定硬约束：直线达标但步行绕路超标的，会被正确淘汰。
+    if provider == "amap" and not args.no_walk:
+        for_walk = [c for c in cands
+                    if c["transit_dist_m"] is not None
+                    and c["transit_dist_m"] <= max_transit]
+        n_skip = len(cands) - len(for_walk)
+        print(f"[4.5/6] 正在计算到最近站点的真实步行距离"
+              f"（{len(for_walk)} 个；{n_skip} 个直线已超约束，跳过省配额）…")
+        n_ok, n_fail = compute_walk_distances(for_walk, amap)
+        print(f"      步行算路成功 {n_ok} 个，失败回退直线 {n_fail} 个")
+        if n_ok:
+            print("      （硬约束与排名将按真实步行距离重新判定，而非直线）")
+        if n_fail:
+            print(f"      ⚠ {n_fail} 个步行算路失败（限流/无路网），这些按直线距离计")
+
     # 5) 打分排序
     cands = score_candidates(cands, cfg, max_transit, target_capacity, full_score_area)
     # 同分时：交通距离近的优先，其次面积大的优先
@@ -997,7 +1068,9 @@ def cmd_scout(args):
             "radius": radius, "type_label": cfg["label"],
             "type_summary": cfg["summary"], "max_transit": max_transit,
             "target_capacity": target_capacity, "total": len(cands),
-            "passed": len(passed)}
+            "passed": len(passed),
+            "transit_note": ("真实步行路网距离" if (provider == "amap" and not args.no_walk)
+                             else "直线距离")}
     write_report(out_md, meta, rows, failed)
     if not args.no_map:
         write_map(os.path.join(args.out_dir, "map.html"), origin, radius, rows)
@@ -1048,6 +1121,8 @@ def main():
     s.add_argument("--out-dir", default="./radius-dispatch-out", help="产物输出目录")
     s.add_argument("--keep-all", action="store_true", help="不过滤交通不达标项")
     s.add_argument("--no-map", action="store_true", help="不生成 HTML 地图")
+    s.add_argument("--no-walk", action="store_true",
+                   help="高德数据源下跳过真实步行距离计算（用直线距离），用于对比")
     s.add_argument("--provider", default="auto", choices=["auto", "osm", "amap"],
                    help="数据源：auto(有 key 用高德，否则 OSM) / osm / amap。默认 auto")
     s.add_argument("--key", default=None,

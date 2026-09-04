@@ -138,16 +138,32 @@ QPS_CODES = ("10004", "30001")
 class AmapProvider:
     name = "amap"
 
+    # 全局最小请求间隔（秒）。所有走 _get 的高德请求统一节流，
+    # 避免候选检索 + 交通检索 + 步行距离连发导致 QPS 超限。
+    # 0.30s ≈ 3.3 QPS。实测 0.15s（6.7 QPS）在长流程（200+ 连续请求）下
+    # 仍会触发限流导致步行算路大量失败，故取更保守的值。
+    MIN_INTERVAL = 0.30
+    _last_req = 0.0
+
     def __init__(self, key):
         if not key:
             raise ValueError("高德 key 为空")
         self.key = key
         self.failed_queries = []      # 失败的（关键词, 页码），供上层判断数据完整性
 
+    def _throttle(self):
+        """发请求前调用：距上次请求不足 MIN_INTERVAL 就 sleep 补齐。"""
+        now = time.monotonic()
+        wait = AmapProvider._last_req + AmapProvider.MIN_INTERVAL - now
+        if wait > 0:
+            time.sleep(wait)
+        AmapProvider._last_req = time.monotonic()
+
     def _get(self, path, params, _retry=0):
         p = dict(params)
         p["key"] = self.key
         p.setdefault("output", "JSON")
+        self._throttle()
         try:
             data = http_get_json(f"{AMAP_BASE}{path}?{urllib.parse.urlencode(p)}")
         except Exception as e:

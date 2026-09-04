@@ -37,7 +37,7 @@
 4. Key 类型选 **Web 服务**（不是 JS / Android / iOS）
 5. 勾选所需服务：POI 搜索、地理编码、逆地理编码、路径规划
 
-### 接入时脚本要改的地方
+### 接入状态（2026-09-05 更新）
 
 **已完成**：`scripts/providers.py` 里的 `AmapProvider` 已实现以下接口，`radius_dispatch.py` 的
 `--provider {auto,osm,amap}` + `--key` / `AMAP_KEY` 已接通，有 key 即用。
@@ -47,8 +47,13 @@
 | `geocode(name)` | Nominatim | `AmapProvider.geocode` → `/v3/geocode/geo` |
 | `search_in_radius(lat, lon, r, cats)` | Overpass | `AmapProvider.search_in_radius` → `/v3/place/around`（按 `amap_keywords` 逐词搜、分页合并去重） |
 | `search_transit(lat, lon, r)` | Overpass | `AmapProvider.search_transit` → 地铁/公交/火车/高铁/汽车站周边搜索 |
-| `route_distance(a, b, mode)` | **直线距离（占位实现）** | `AmapProvider.route_distance` → `/v3/direction/walking` 真实步行路网距离（**尚未接入打分，仍用直线距离**） |
+| `route_distance(a, b, mode)` | **直线距离** | `AmapProvider.route_distance` → `/v3/direction/walking` 真实步行路网距离。**已接入打分**：`scout` 流程对直线 ≤ 硬约束的候选逐个算步行距离并覆盖 `transit_dist_m`（原直线存 `line_dist_m`），硬约束与排名按步行距离判定。算路失败自动重试一次，仍失败回退直线并标注。可用 `--no-walk` 关闭对比 |
 | `isochrone(lat, lon, minutes)` | 未实现 | 未实现（等时圈，需公交/驾车路径规划，非步行） |
+
+**全局 QPS 节流**：`AmapProvider` 内置类级节流器（默认 0.3s/请求 ≈ 3.3 QPS）。
+实测 0.15s（6.7 QPS）在长流程（200+ 连续请求）下仍会触发高德限流导致步行算路大量失败
+（一度 45% 失败），0.3s 后步行成功率提升到 90%。若想更快可在 `providers.py` 调小 `MIN_INTERVAL`，
+代价是限流概率上升（脚本已有退避重试兜底）。
 
 ### 四个坑（均已处理，前三个经官方文档核实）
 
