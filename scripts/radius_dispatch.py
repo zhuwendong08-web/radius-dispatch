@@ -782,8 +782,9 @@ def derive_checklist(flags):
     return "；".join(checks)
 
 
-CONTACT_FIELDS = ["rank", "name", "score", "dist_to_origin_m", "transit_dist_m",
-                  "nearest_transit", "phone", "address", "kind", "checklist"]
+CONTACT_FIELDS = ["rank", "name", "score", "rating", "dist_to_origin_m",
+                  "transit_dist_m", "nearest_transit", "phone", "address",
+                  "kind", "checklist"]
 
 
 def write_contacts(path, rows, origin_name, target_capacity):
@@ -793,6 +794,7 @@ def write_contacts(path, rows, origin_name, target_capacity):
     for r in rows:
         out.append({
             "rank": r["rank"], "name": r["name"], "score": r["score"],
+            "rating": r.get("rating", ""),
             "dist_to_origin_m": r["dist_to_origin_m"],
             "transit_dist_m": r["transit_dist_m"],
             "nearest_transit": r["nearest_transit"],
@@ -1214,6 +1216,25 @@ def cmd_scout(args):
     for i, c in enumerate(passed, 1):
         c["rank"] = i
 
+    # 5.5) 详情弱信号：--detail 时查候选评分/营业状态（place/detail，个人 key 可用）
+    # 评分<3 与「无营业时间」是质量/状态警示，不改排序，只标注供人工判断。
+    if getattr(args, "detail", False) and provider == "amap":
+        print(f"[5.5/6] 正在查询候选评分/营业状态（{len(passed)} 个，place/detail）…")
+        got = 0
+        for c in passed:
+            dd = amap.place_detail(c.get("id") or "")
+            if dd:
+                c["rating"] = dd["rating"]
+                c["opentime"] = dd["opentime"]
+                got += 1
+        print(f"      {got}/{len(passed)} 返回详情")
+        for c in passed:
+            if c.get("rating") is not None and c["rating"] < 3:
+                c.setdefault("flags", []).append(
+                    f"评分偏低({c['rating']})，建议谨慎核实")
+            if "rating" in c and not c.get("opentime"):
+                c.setdefault("flags", []).append("营业时间未知，可能停业/信息缺失")
+
     # 6) 出产物
     rows = passed[:args.top]
     out_csv = os.path.join(args.out_dir, "candidates.csv")
@@ -1500,6 +1521,8 @@ def main():
                    help="等时圈每方向二分迭代，默认 10")
     s.add_argument("--contacts", action="store_true",
                    help="额外输出 contacts.csv：带电话/地址/需人工核实事项的联系清单")
+    s.add_argument("--detail", action="store_true",
+                   help="高德下查询候选评分/营业时间（place/detail），低分场地标注警示")
     s.add_argument("--provider", default="auto", choices=["auto", "osm", "amap"],
                    help="数据源：auto(有 key 用高德，否则 OSM) / osm / amap。默认 auto")
     s.add_argument("--key", default=None,

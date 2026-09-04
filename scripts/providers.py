@@ -343,3 +343,36 @@ class AmapProvider:
             return float(paths[0].get("distance"))
         except Exception:
             return None
+
+    # ---- POI 详情（评分/营业状态弱信号）----
+    def place_detail(self, pid):
+        """
+        /v3/place/detail：POI 详情。个人 key 可用（2026-09-05 实测），返回 biz_ext，
+        其中含 rating(评分) 与 opentime/opentime2(营业时间)——质量与营业状态的弱信号。
+        不返回面积/人数（要那得 AOI 边界，个人 key 权限不足 10012）。
+        失败返回 None（不抛，调用方决定是否跳过）。
+        """
+        pid = pid.replace("amap/", "")
+        try:
+            data = self._get("/v3/place/detail", {"id": pid})
+        except Exception:
+            return None
+        pois = data.get("pois") or []
+        if not pois:
+            return None
+        poi = pois[0]
+        biz = poi.get("biz_ext") or {}
+        rating_raw = biz.get("rating") or poi.get("rating")
+        try:
+            rating = float(rating_raw)
+        except (TypeError, ValueError):
+            rating = None
+        ot = biz.get("opentime2") or biz.get("opentime") or ""
+        if isinstance(ot, list):
+            ot = "".join(str(x) for x in ot)
+        return {
+            "name": poi.get("name") or "",
+            "rating": rating,
+            "opentime": str(ot).strip() if ot else "",
+            "biz_ext": biz,
+        }
