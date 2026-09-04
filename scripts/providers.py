@@ -292,10 +292,14 @@ class AmapProvider:
     # ---- 交通站点检索 ----
     def search_transit(self, lat, lon, radius):
         # 站点密度高，翻 3 页（75 条/词）足够覆盖，省配额给候选场地检索
-        return self.search_in_radius(
+        res = self.search_in_radius(
             lat, lon, radius,
             keywords=["地铁站", "公交站", "火车站", "高铁站", "汽车站"],
             limit=200, max_pages_per_kw=3)
+        # 过滤非公共交通点：高德 keywords 模糊匹配会把「汽车充电站/加油站」当「汽车站」
+        # 召回（实测混入「滴滴充电汽车充电站」距离1.2m），必须剔除，否则站点距离失真。
+        junk = ("充电", "加油站", "加气站", "换电站", "充电桩")
+        return [c for c in res if not any(j in (c.get("name") or "") for j in junk)]
 
     def _poi_to_candidate(self, p):
         """高德 POI → 内部候选结构（字段与 OSM 版保持一致）"""
