@@ -543,24 +543,30 @@ def parse_transit(elements):
 # 3) 富化 / 打分
 # ----------------------------------------------------------------------------
 def enrich(cands, transits, origin):
-    """补：到原点距离、最近交通站点及距离（直线）。后续可被步行路网距离覆盖。"""
+    """补：到原点距离、各候选直线前 3 的交通站点（供步行算路择优）。
+    存 nearest_stations 候选表；nearest_transit/transit_dist_m 初始为直线最近站。"""
     for c in cands:
         c["dist_to_origin_m"] = round(haversine(origin["lat"], origin["lon"],
                                                 c["lat"], c["lon"]), 1)
-        best = None
+        ds = []
         for t in transits:
             d = haversine(c["lat"], c["lon"], t["lat"], t["lon"])
-            if best is None or d < best[1]:
-                # 存 (name, 直线距离, type, lat, lon)，坐标供后续步行算路用
-                best = (t["name"], d, t["type"], t["lat"], t["lon"])
-        if best:
-            c["nearest_transit"] = best[0]
-            c["transit_dist_m"] = round(best[1], 1)   # 直线距离（初始）
+            ds.append((d, t["name"], t["type"], t["lat"], t["lon"]))
+        if ds:
+            ds.sort(key=lambda x: x[0])
+            top = ds[:3]                       # 直线前 3，给步行择优用
+            best = top[0]
+            c["nearest_stations"] = [
+                {"name": x[1], "type": x[2], "lat": x[3], "lon": x[4],
+                 "line_dist_m": round(x[0], 1)} for x in top]
+            c["nearest_transit"] = best[1]
+            c["transit_dist_m"] = round(best[0], 1)   # 直线距离（初始）
             c["nearest_transit_type"] = best[2]
             c["nearest_lat"] = best[3]
             c["nearest_lon"] = best[4]
             c["transit_mode"] = "line"                # line=直线 / walk=步行路网
         else:
+            c["nearest_stations"] = []
             c["nearest_transit"] = ""
             c["transit_dist_m"] = None
             c["nearest_transit_type"] = ""
@@ -568,21 +574,34 @@ def enrich(cands, transits, origin):
     return cands
 
 
-def compute_walk_distances(cands, amap):
+def compute_walk_distances(cands, amap, max_transit=1000):
     """
-    把「到最近站点」的直线距离升级为真实步行路网距离（仅高德数据源）。
-    逐个调用步行路径规划 API；成功则覆盖 transit_dist_m（原直线存入 line_dist_m），
-    失败保留直线并标记。调用方需已对通过硬约束的候选过滤，避免浪费配额。
-    返回 (成功数, 失败数)。
+    把「到站点」距离从直线升级为真实步行路网距离（仅高德数据源）。
+    **对每个候选的 top-3 站点各算一次步行，取最小**——直线最近 ≠ 步行最近
+    （实测「田园乐露营」直线 28m 到站、实走 189m；最近站点若在马路对面/封闭侧，
+    第二个站点反而更近）。
+    明显超约束的站点跳过（步行只会更远，算它无意义），省配额。
+    失败保留直线并标记。返回 (成功数, 失败数)。
     """
     n_ok = n_fail = 0
     for c in cands:
-        if c["transit_dist_m"] is None:
+        stations = [s for s in c.get("nearest_stations") or []
+                    if s["line_dist_m"] <= max_transit * 1.5]
+        if not stations:
+            c["walk_fail"] = True
+            n_fail += 1
             continue
-        d = _route_retry(amap, c)
-        if d is not None and d > 0:
-            c["line_dist_m"] = c["transit_dist_m"]   # 保留直线，供对照
-            c["transit_dist_m"] = round(d, 1)
+        best_walk = None                       # (dist, station)
+        for st in stations:
+            d = _route_retry(amap, (c["lat"], c["lon"]), (st["lat"], st["lon"]))
+            if d is not None and d > 0 and (best_walk is None or d < best_walk[0]):
+                best_walk = (d, st)
+        if best_walk:
+            c["line_dist_m"] = c["transit_dist_m"]   # 保留直线最近站距离，供对照
+            c["transit_dist_m"] = round(best_walk[0], 1)
+            c["nearest_transit"] = best_walk[1]["name"]
+            c["nearest_lat"] = best_walk[1]["lat"]
+            c["nearest_lon"] = best_walk[1]["lon"]
             c["transit_mode"] = "walk"
             n_ok += 1
         else:
@@ -591,16 +610,15 @@ def compute_walk_distances(cands, amap):
     return n_ok, n_fail
 
 
-def _route_retry(amap, c, _try=0):
-    """单次步行算路，失败延迟重试一次（实测失败多为 QPS 限流，重试能救回大半）。"""
+def _route_retry(amap, a, b, _try=0):
+    """两点步行算路，失败延迟重试一次（实测失败多为 QPS 限流，重试能救回大半）。
+    a, b 均为 (lat, lon) 内部 WGS84。"""
     try:
-        return amap.route_distance(
-            (c["lat"], c["lon"]),
-            (c["nearest_lat"], c["nearest_lon"]))
+        return amap.route_distance(a, b)
     except Exception:
         if _try < 1:
             time.sleep(1.5)                          # 避让限流窗口
-            return _route_retry(amap, c, _try + 1)
+            return _route_retry(amap, a, b, _try + 1)
         return None
 
 
@@ -746,6 +764,48 @@ def write_csv(path, rows):
         w.writeheader()
         for r in rows:
             w.writerow(r)
+
+
+def derive_checklist(flags):
+    """从 flags 推导「打电话时要核实什么」。flags 的完整清单见 score_candidates。"""
+    checks = []
+    if any("容量" in f for f in flags):
+        checks.append("核实能否容纳目标人数")
+    if any("按类型推断" in f for f in flags):
+        checks.append("核实实际接待能力")
+    if any("算路失败" in f for f in flags):
+        checks.append("核实到站实际步行")
+    if any("未知" in f for f in flags):
+        checks.append("确认营业状态与规模")
+    if not checks:
+        checks.append("报团建价/查档期")
+    return "；".join(checks)
+
+
+CONTACT_FIELDS = ["rank", "name", "score", "dist_to_origin_m", "transit_dist_m",
+                  "nearest_transit", "phone", "address", "kind", "checklist"]
+
+
+def write_contacts(path, rows, origin_name, target_capacity):
+    """联系核实版 CSV：带电话/地址/需人工核实事项，供直接打电话用。
+    地址全有、电话约 55% 覆盖（高德 POI 有 tel 的才有），无电话的需地图 App 搜名字。"""
+    out = []
+    for r in rows:
+        out.append({
+            "rank": r["rank"], "name": r["name"], "score": r["score"],
+            "dist_to_origin_m": r["dist_to_origin_m"],
+            "transit_dist_m": r["transit_dist_m"],
+            "nearest_transit": r["nearest_transit"],
+            "phone": r.get("phone") or "",
+            "address": r.get("address") or "",
+            "kind": r.get("kind") or "",
+            "checklist": derive_checklist(r.get("flags") or []),
+        })
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=CONTACT_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(out)
+    return out
 
 
 def write_report(path, meta, rows, filtered_out):
@@ -1130,7 +1190,7 @@ def cmd_scout(args):
         n_skip = len(cands) - len(for_walk)
         print(f"[4.5/6] 正在计算到最近站点的真实步行距离"
               f"（{len(for_walk)} 个；{n_skip} 个直线已超约束，跳过省配额）…")
-        n_ok, n_fail = compute_walk_distances(for_walk, amap)
+        n_ok, n_fail = compute_walk_distances(for_walk, amap, max_transit)
         print(f"      步行算路成功 {n_ok} 个，失败回退直线 {n_fail} 个")
         if n_ok:
             print("      （硬约束与排名将按真实步行距离重新判定，而非直线）")
@@ -1179,6 +1239,13 @@ def cmd_scout(args):
     if not args.no_map:
         write_map(os.path.join(args.out_dir, "map.html"), origin, radius, rows,
                   iso_pts=iso_pts, minutes=getattr(args, "isochrone_minutes", None))
+    if getattr(args, "contacts", False):
+        contact_path = os.path.join(args.out_dir, "contacts.csv")
+        contact_rows = write_contacts(contact_path, passed, origin["name"],
+                                      target_capacity)
+        n_tel = sum(1 for r in contact_rows if r["phone"])
+        print(f"      联系清单：{contact_path}（{len(contact_rows)} 个，"
+              f"{n_tel} 个有电话）")
     print(f"[6/6] 产物已写入 {os.path.abspath(args.out_dir)}")
 
     # 控制台摘要
@@ -1431,6 +1498,8 @@ def main():
                    help="等时圈单方向二分上界（米），默认 60000")
     s.add_argument("--iso-iterations", type=int, default=10,
                    help="等时圈每方向二分迭代，默认 10")
+    s.add_argument("--contacts", action="store_true",
+                   help="额外输出 contacts.csv：带电话/地址/需人工核实事项的联系清单")
     s.add_argument("--provider", default="auto", choices=["auto", "osm", "amap"],
                    help="数据源：auto(有 key 用高德，否则 OSM) / osm / amap。默认 auto")
     s.add_argument("--key", default=None,
