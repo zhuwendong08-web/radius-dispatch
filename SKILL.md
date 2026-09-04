@@ -109,9 +109,10 @@ python scripts/radius_dispatch.py scout \
 信号优先级：噪声词 > 名称强意图 > 名称中等意图 > 负向(容量不足) > 类目 > 默认。
 详见 `references/providers.md`。
 
-扩展新类型：改 `scripts/radius_dispatch.py` 里的 `BUSINESS_TYPES` 字典——
-每套配置 = OSM 标签映射 + 名称关键词兜底 + 四项权重 + 适配度规则 + 默认硬约束。
-详见 `references/business-types.md`。
+扩展新类型：**不用改代码**——业务配置真源在 `config/business_types.json`，
+每套 = OSM 标签 + 高德关键词 + 四项权重 + 适配度规则 + 默认硬约束。
+加 `--type-file <json>` 可加载自定义类型（覆盖/扩展内置）。示例见 `references/business-types.md`。
+（内置配置调整也直接改 JSON 文件即可，已入库随仓库分发。）
 
 ## 使用建议
 

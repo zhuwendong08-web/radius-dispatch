@@ -1,0 +1,395 @@
+{
+  "team-building": {
+    "label": "团建 / 活动场地",
+    "summary": "要场地大、能容纳 200~300 人、交通必须便利；周边配套要求不高。",
+    "osm_tags": {
+      "leisure": [
+        "park",
+        "sports_centre",
+        "stadium",
+        "playground",
+        "sports_hall",
+        "fitness_centre",
+        "golf_course",
+        "nature_reserve",
+        "recreation_ground"
+      ],
+      "amenity": [
+        "conference_centre",
+        "events_venue",
+        "community_centre",
+        "theatre",
+        "arts_centre"
+      ],
+      "tourism": [
+        "hotel",
+        "camp_site",
+        "picnic_site",
+        "theme_park",
+        "zoo",
+        "attraction"
+      ],
+      "landuse": [
+        "recreation_ground"
+      ],
+      "building": [
+        "stadium",
+        "sports_hall"
+      ]
+    },
+    "name_keywords": [
+      "拓展",
+      "团建",
+      "轰趴",
+      "农庄",
+      "度假",
+      "训练基地",
+      "会议",
+      "宴会",
+      "活动中心",
+      "乐园",
+      "山庄",
+      "生态园"
+    ],
+    "weights": {
+      "transit": 0.3,
+      "suitability": 0.5,
+      "size": 0.1,
+      "capacity": 0.1
+    },
+    "suitability": {
+      "small_venue": [
+        "手作",
+        "diy",
+        "DIY",
+        "奶油胶",
+        "石膏",
+        "娃娃",
+        "陶艺",
+        "绘画",
+        "画画",
+        "美术",
+        "黏土",
+        "流体熊",
+        "tufting",
+        "电玩",
+        "游戏厅",
+        "游戏馆",
+        "ps5",
+        "PS5",
+        "switch",
+        "剧本杀",
+        "桌游",
+        "麻将",
+        "棋牌",
+        "密室",
+        "猫咖",
+        "狗咖",
+        "娃娃机",
+        "抓娃娃"
+      ],
+      "small_venue_score": 55,
+      "strong": {
+        "团建": 95,
+        "拓展": 95,
+        "拓展基地": 98,
+        "轰趴": 90,
+        "真人CS": 92,
+        "CS": 90,
+        "营地": 88,
+        "露营": 85,
+        "户外": 78
+      },
+      "medium": {
+        "生态园": 88,
+        "农庄": 85,
+        "山庄": 85,
+        "农家乐": 85,
+        "庄园": 82,
+        "农场": 82,
+        "度假": 80,
+        "度假村": 82,
+        "乐园": 72,
+        "会议中心": 78,
+        "宴会厅": 70,
+        "活动中心": 70,
+        "烧烤乐园": 80,
+        "采摘园": 78,
+        "垂钓园": 70,
+        "钓虾": 68
+      },
+      "weak": {
+        "球场": 30,
+        "篮球": 25,
+        "网球": 25,
+        "足球": 30,
+        "羽毛球": 30,
+        "乒乓球": 25,
+        "游泳": 30,
+        "健身": 25,
+        "台球": 25,
+        "瑜伽": 25,
+        "舞蹈": 30,
+        "跆拳道": 25,
+        "武馆": 30,
+        "溜冰": 25,
+        "烧烤": 30,
+        "采摘": 32,
+        "钓虾": 30,
+        "垂钓": 30
+      },
+      "category": {
+        "综合体育馆": 80,
+        "会展中心": 85,
+        "展览馆": 80,
+        "体育休闲服务场所": 70,
+        "运动场所": 65,
+        "休闲场所": 62,
+        "旅游景点": 65,
+        "公园": 62,
+        "度假疗养场所": 76,
+        "篮球场馆": 25,
+        "网球场": 25,
+        "游泳馆": 30,
+        "健身中心": 25,
+        "乒乓球馆": 25,
+        "台球厅": 25,
+        "培训机构": 10,
+        "科教文化场所": 30,
+        "中餐厅": 30,
+        "火锅店": 25,
+        "特色/地方风味餐厅": 30,
+        "湖南菜(湘菜)": 25,
+        "咖啡厅": 20,
+        "星巴克咖啡": 15,
+        "冷饮店": 10,
+        "生活服务场所": 25,
+        "小吃": 15,
+        "购物相关场所": 10,
+        "服装鞋帽皮具店": 10,
+        "公司企业": 15,
+        "公司": 15,
+        "驾校": 10,
+        "美容美发店": 10,
+        "医疗保健服务场所": 15
+      },
+      "noise": [
+        "小吃",
+        "实训",
+        "培训",
+        "卷边",
+        "电工",
+        "焊工",
+        "叉车",
+        "起重机",
+        "电梯",
+        "安全管理",
+        "驾校",
+        "美容",
+        "理发",
+        "纺织",
+        "潜水料",
+        "广告",
+        "装饰"
+      ],
+      "noise_score": 12,
+      "default": 50
+    },
+    "capacity_proxy": {
+      "stadium": 85,
+      "sports_hall": 85,
+      "conference_centre": 85,
+      "events_venue": 85,
+      "theatre": 80,
+      "arts_centre": 80,
+      "sports_centre": 78,
+      "theme_park": 70,
+      "zoo": 70,
+      "recreation_ground": 65,
+      "hotel": 68,
+      "camp_site": 62,
+      "park": 60,
+      "golf_course": 60,
+      "attraction": 58,
+      "picnic_site": 55,
+      "nature_reserve": 55,
+      "community_centre": 55,
+      "fitness_centre": 45,
+      "playground": 40
+    },
+    "amap_keywords": [
+      "拓展基地",
+      "团建",
+      "轰趴馆",
+      "农家乐",
+      "农庄",
+      "度假村",
+      "会议中心",
+      "会展中心",
+      "宴会厅",
+      "生态园",
+      "户外拓展",
+      "山庄",
+      "庄园",
+      "农场",
+      "生态园",
+      "露营",
+      "营地",
+      "真人CS",
+      "采摘",
+      "烧烤"
+    ],
+    "defaults": {
+      "max_transit_distance": 1000,
+      "target_capacity": 250,
+      "full_score_area": 5000
+    }
+  },
+  "warehouse": {
+    "label": "仓储 / 物流用地",
+    "summary": "重面积与路网可达，对地铁依赖低；高德无面积数据，排名靠园区级适配度。",
+    "osm_tags": {
+      "landuse": [
+        "industrial"
+      ],
+      "building": [
+        "warehouse",
+        "industrial"
+      ],
+      "industrial": [
+        "warehouse"
+      ]
+    },
+    "name_keywords": [
+      "仓库",
+      "物流",
+      "产业园",
+      "仓储",
+      "货运",
+      "配送中心"
+    ],
+    "amap_keywords": [
+      "仓库",
+      "物流园",
+      "产业园",
+      "仓储中心",
+      "物流中心",
+      "货运站"
+    ],
+    "weights": {
+      "transit": 0.25,
+      "suitability": 0.45,
+      "size": 0.2,
+      "capacity": 0.1
+    },
+    "suitability": {
+      "strong": {
+        "物流园": 95,
+        "仓储中心": 95,
+        "物流中心": 93,
+        "产业园": 92,
+        "工业园": 90,
+        "配送中心": 88,
+        "货运站": 85
+      },
+      "medium": {
+        "仓库": 78,
+        "物流": 82,
+        "仓储": 85,
+        "厂房": 72,
+        "基地": 65
+      },
+      "category": {
+        "仓储": 85,
+        "物流速递": 85,
+        "工业园区": 88,
+        "工厂": 68
+      },
+      "noise": [
+        "小吃",
+        "餐厅",
+        "饭店",
+        "培训",
+        "驾校",
+        "美容",
+        "理发"
+      ],
+      "noise_score": 15,
+      "default": 50
+    },
+    "defaults": {
+      "max_transit_distance": 5000,
+      "target_capacity": 0,
+      "full_score_area": 20000
+    }
+  },
+  "service-outlet": {
+    "label": "服务网点",
+    "summary": "重人流可达，交通分权重最高；面积要求低。",
+    "osm_tags": {
+      "amenity": [
+        "community_centre",
+        "post_office",
+        "bank",
+        "library"
+      ],
+      "shop": [
+        "mall",
+        "supermarket",
+        "convenience"
+      ],
+      "office": [
+        "company",
+        "coworking"
+      ]
+    },
+    "name_keywords": [
+      "服务中心",
+      "营业厅",
+      "网点",
+      "便民",
+      "驿站"
+    ],
+    "amap_keywords": [
+      "服务中心",
+      "营业厅",
+      "网点",
+      "便民服务中心",
+      "社区服务中心"
+    ],
+    "weights": {
+      "transit": 0.5,
+      "suitability": 0.3,
+      "size": 0.1,
+      "capacity": 0.1
+    },
+    "suitability": {
+      "strong": {
+        "服务中心": 90,
+        "营业厅": 92,
+        "便民服务中心": 92,
+        "社区服务中心": 90,
+        "网点": 88,
+        "驿站": 85
+      },
+      "medium": {
+        "社区": 70,
+        "办事": 72,
+        "政务": 72
+      },
+      "category": {
+        "生活服务场所": 75,
+        "便民服务": 80,
+        "政府机构": 60
+      },
+      "noise": [],
+      "noise_score": 20,
+      "default": 50
+    },
+    "defaults": {
+      "max_transit_distance": 800,
+      "target_capacity": 0,
+      "full_score_area": 1000
+    }
+  }
+}

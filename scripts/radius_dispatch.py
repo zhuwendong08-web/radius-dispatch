@@ -83,159 +83,38 @@ EARTH_R = 6371000.0
 # 业务类型配置：约束模板 + POI 类目映射 + 打分权重
 # 每套配置就是「业务类型参数化」的落点，改这里即可扩展新类型
 # ----------------------------------------------------------------------------
-BUSINESS_TYPES = {
-    "team-building": {
-        "label": "团建 / 活动场地",
-        "summary": "要场地大、能容纳 200~300 人、交通必须便利；周边配套要求不高。",
-        "osm_tags": {
-            "leisure": ["park", "sports_centre", "stadium", "playground", "sports_hall",
-                        "fitness_centre", "golf_course", "nature_reserve", "recreation_ground"],
-            "amenity": ["conference_centre", "events_venue", "community_centre",
-                        "theatre", "arts_centre"],
-            "tourism": ["hotel", "camp_site", "picnic_site", "theme_park", "zoo",
-                        "attraction"],
-            "landuse": ["recreation_ground"],
-            "building": ["stadium", "sports_hall"],
-        },
-        "name_keywords": ["拓展", "团建", "轰趴", "农庄", "度假", "训练基地",
-                          "会议", "宴会", "活动中心", "乐园", "山庄", "生态园"],
-        # 权重四维度。适配度 0.5 高于交通 0.3，理由：
-        #   场地类型错了（篮球场装不下 200 人），离地铁再近也没用；
-        #   反之场地对了，远 500 米可以包车解决。实测若两者同权，
-        #   交通顶格的球场会压过交通一般的户外拓展基地，排序失去业务意义。
-        "weights": {"transit": 0.3, "suitability": 0.5, "size": 0.1,
-                    "capacity": 0.1},
-        # ---- 适配度：这个场地「像不像」团建场地 ----
-        # 高德不返回面积/容量，但返回中文类目和名称，这两者区分度极高：
-        #   「小满营地烧烤.采摘.团建」这种名字比任何类型推断都准。
-        # 名称信号优先于类目信号（名字直接写用途 > 平台归档的类目）。
-        "suitability": {
-            # 小容量业态：即便名字标了「团建/轰趴」，这类体验馆也装不下 200~300 人
-            # （手作/电玩/剧本杀等是 10~30 人小团业态）。优先级必须在 strong 之前，
-            # 否则「XX手作·团建」「XX电玩·轰趴」会命中团建/轰趴拿满分。
-            # 市中心实测暴露：虎门没有这类场地，市中心(手作集合馆/电玩轰趴馆)就现形了。
-            "small_venue": ["手作", "diy", "DIY", "奶油胶", "石膏", "娃娃", "陶艺",
-                            "绘画", "画画", "美术", "黏土", "流体熊", "tufting",
-                            "电玩", "游戏厅", "游戏馆", "ps5", "PS5", "switch",
-                            "剧本杀", "桌游", "麻将", "棋牌", "密室", "猫咖",
-                            "狗咖", "娃娃机", "抓娃娃"],
-            "small_venue_score": 55,
-            # 强意图：名字里直接写了就是干这个的。
-            # 注意「烧烤/采摘/钓虾」等不能单独算强信号——它们是营地的「项目」，
-            # 不是场地本身。「XX烧烤王」「XX羊肉烧烤」是烧烤店，不是团建场地。
-            # 它们与营地类词（营地/团建/农庄等）同现时，营地词会先命中返回高分；
-            # 单独出现时落到 weak 层低分。实测把「烧烤」放 strong 会让纯烧烤店混进前排。
-            "strong": {"团建": 95, "拓展": 95, "拓展基地": 98, "轰趴": 90,
-                       "真人CS": 92, "CS": 90, "营地": 88, "露营": 85,
-                       "户外": 78},
-            # 中等意图：场地类型对（有大片空地，能装下 200 人），但没明说用途
-            "medium": {"生态园": 88, "农庄": 85, "山庄": 85, "农家乐": 85,
-                       "庄园": 82, "农场": 82, "度假": 80, "度假村": 82,
-                       "乐园": 72, "会议中心": 78, "宴会厅": 70, "活动中心": 70,
-                       "烧烤乐园": 80, "采摘园": 78, "垂钓园": 70, "钓虾": 68},
-            # 负向：是运动/休闲场地，但装不下 200~300 人（容量不符，非用途不符）
-            #   实测这批是最大的"高分噪声"——篮球场/游泳馆/健身中心离地铁近，
-            #   交通分顶格，若无此层会霸占前排，把真正的农庄挤下去。
-            "weak": {"球场": 30, "篮球": 25, "网球": 25, "足球": 30,
-                     "羽毛球": 30, "乒乓球": 25, "游泳": 30, "健身": 25,
-                     "台球": 25, "瑜伽": 25, "舞蹈": 30, "跆拳道": 25,
-                     "武馆": 30, "溜冰": 25, "烧烤": 30, "采摘": 32,
-                     "钓虾": 30, "垂钓": 30},
-            # 类目兜底（高德中文类目）。数值同样反映容量，不只看用途。
-            "category": {"综合体育馆": 80, "会展中心": 85, "展览馆": 80,
-                         "体育休闲服务场所": 70, "运动场所": 65, "休闲场所": 62,
-                         "旅游景点": 65, "公园": 62, "度假疗养场所": 76,
-                         "篮球场馆": 25, "网球场": 25, "游泳馆": 30,
-                         "健身中心": 25, "乒乓球馆": 25, "台球厅": 25,
-                         "培训机构": 10, "科教文化场所": 30,
-                         "中餐厅": 30, "火锅店": 25, "特色/地方风味餐厅": 30,
-                         "湖南菜(湘菜)": 25, "咖啡厅": 20, "星巴克咖啡": 15,
-                         "冷饮店": 10, "生活服务场所": 25, "小吃": 15,
-                         "购物相关场所": 10, "服装鞋帽皮具店": 10,
-                         "公司企业": 15, "公司": 15, "驾校": 10,
-                         "美容美发店": 10, "医疗保健服务场所": 15},
-            # 噪声词：出现即判定非目标场地（优先级最高）
-            "noise": ["小吃", "实训", "培训", "卷边", "电工", "焊工", "叉车",
-                      "起重机", "电梯", "安全管理", "驾校", "美容", "理发",
-                      "纺织", "潜水料", "广告", "装饰"],
-            "noise_score": 12,
-            "default": 50,
-        },
-        # 容量代理：OSM 极少标注 capacity，故用「场地类型」推断可容纳能力，
-        # 避免把「200 人的小广场」和「能装 300 人的体育场」判成同分。
-        "capacity_proxy": {
-            "stadium": 85, "sports_hall": 85, "conference_centre": 85,
-            "events_venue": 85, "theatre": 80, "arts_centre": 80,
-            "sports_centre": 78, "theme_park": 70, "zoo": 70,
-            "recreation_ground": 65, "hotel": 68, "camp_site": 62,
-            "park": 60, "golf_course": 60, "attraction": 58,
-            "picnic_site": 55, "nature_reserve": 55, "community_centre": 55,
-            "fitness_centre": 45, "playground": 40,
-        },
-        # 高德关键词。
-        # 「培训基地」已删除：实测它召回 80 个培训机构（叉车/电工/小吃实训/艺术培训），
-        #   占候选总量 58%，是最大的噪声源。团建要的是「拓展培训」，不是「叉车培训」。
-        # 「体育馆」「体育中心」也已删除：召回的多是篮球场/游泳馆/健身房，
-        #   这类场地装不下 200~300 人，属容量不符而非用途不符。
-        "amap_keywords": ["拓展基地", "团建", "轰趴馆", "农家乐", "农庄", "度假村",
-                          "会议中心", "会展中心", "宴会厅", "生态园", "户外拓展",
-                          "山庄", "庄园", "农场", "生态园", "露营", "营地",
-                          "真人CS", "采摘", "烧烤"],
-        "defaults": {"max_transit_distance": 1000, "target_capacity": 250,
-                     "full_score_area": 5000},
-    },
-    "warehouse": {
-        "label": "仓储 / 物流用地",
-        "summary": "重面积与路网可达，对地铁依赖低；高德无面积数据，排名靠园区级适配度。",
-        "osm_tags": {
-            "landuse": ["industrial"],
-            "building": ["warehouse", "industrial"],
-            "industrial": ["warehouse"],
-        },
-        "name_keywords": ["仓库", "物流", "产业园", "仓储", "货运", "配送中心"],
-        "amap_keywords": ["仓库", "物流园", "产业园", "仓储中心", "物流中心", "货运站"],
-        # 权重注意：size 0.2 而非 0.6——高德不返回面积，size 恒走中性分，
-        # 占 0.6 会让所有候选同分（实测前 12 名全 52.0）。园区级适配度才是区分主力。
-        "weights": {"transit": 0.25, "suitability": 0.45, "size": 0.2,
-                    "capacity": 0.1},
-        "suitability": {
-            # 园区级 > 单体仓库：物流园/产业园才是大规模仓储选址目标；
-            # 单体「XX仓库」中性（可能大可能小，无法从名字判断）。
-            "strong": {"物流园": 95, "仓储中心": 95, "物流中心": 93, "产业园": 92,
-                       "工业园": 90, "配送中心": 88, "货运站": 85},
-            "medium": {"仓库": 78, "物流": 82, "仓储": 85, "厂房": 72, "基地": 65},
-            "category": {"仓储": 85, "物流速递": 85, "工业园区": 88, "工厂": 68},
-            # 业务词（纺织/机械/压褶等）说明是「什么货的仓库」，不改变场地规模等级，
-            # 不应拉低分——故只作中性，不列 noise。真正噪声是无关业态。
-            "noise": ["小吃", "餐厅", "饭店", "培训", "驾校", "美容", "理发"],
-            "noise_score": 15, "default": 50,
-        },
-        "defaults": {"max_transit_distance": 5000, "target_capacity": 0,
-                     "full_score_area": 20000},
-    },
-    "service-outlet": {
-        "label": "服务网点",
-        "summary": "重人流可达，交通分权重最高；面积要求低。",
-        "osm_tags": {
-            "amenity": ["community_centre", "post_office", "bank", "library"],
-            "shop": ["mall", "supermarket", "convenience"],
-            "office": ["company", "coworking"],
-        },
-        "name_keywords": ["服务中心", "营业厅", "网点", "便民", "驿站"],
-        "amap_keywords": ["服务中心", "营业厅", "网点", "便民服务中心", "社区服务中心"],
-        "weights": {"transit": 0.5, "suitability": 0.3, "size": 0.1,
-                    "capacity": 0.1},
-        "suitability": {
-            "strong": {"服务中心": 90, "营业厅": 92, "便民服务中心": 92,
-                       "社区服务中心": 90, "网点": 88, "驿站": 85},
-            "medium": {"社区": 70, "办事": 72, "政务": 72},
-            "category": {"生活服务场所": 75, "便民服务": 80, "政府机构": 60},
-            "noise": [], "noise_score": 20, "default": 50,
-        },
-        "defaults": {"max_transit_distance": 800, "target_capacity": 0,
-                     "full_score_area": 1000},
-    },
-}
+# ----------------------------------------------------------------------------
+# 业务类型配置：约束模板 + POI 类目映射 + 打分权重（"业务类型参数化"的落点）
+# 真源在 config/business_types.json——用户不碰代码即可增改类型；
+# 脚本只负责加载与合并。结构说明见 references/business-types.md。
+# ----------------------------------------------------------------------------
+def _types_json_path():
+    # scripts/ 的上层目录下的 config/business_types.json
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "config", "business_types.json")
+
+
+def load_business_types(extra_file=None):
+    """加载内置 config/business_types.json，并用可选 extra_file 覆盖/扩展。
+    内置文件缺失时报错（配置是运行必需，静默空跑比报错更糟）。"""
+    data = {}
+    p = _types_json_path()
+    if not os.path.exists(p):
+        raise RuntimeError("找不到业务类型配置：" + p
+                           + "。技能包需包含 config/business_types.json。")
+    with open(p, encoding="utf-8") as f:
+        data = json.load(f)
+    if extra_file:
+        with open(extra_file, encoding="utf-8") as f:
+            extra = json.load(f)
+        for k, v in extra.items():
+            data[k] = v          # 同 key 覆盖，新 key 新增
+        print(f"[配置] 已加载自定义类型文件 {extra_file}（共 {len(data)} 类）")
+    return data
+
+
+BUSINESS_TYPES = load_business_types()
+
 
 CAPACITY_KEYS = ["capacity", "capacity:persons", "seats", "max_capacity"]
 
@@ -1469,6 +1348,8 @@ def main():
     p = argparse.ArgumentParser(
         prog="radius_dispatch.py",
         description="radius-dispatch · 地点范围测定 / 选址 scout（OpenStreetMap，免 key）")
+    p.add_argument("--type-file", default=None,
+                   help="加载自定义业务类型 JSON（覆盖/扩展内置 config/business_types.json）")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("types", help="列出内置业务类型").set_defaults(func=cmd_types)
@@ -1509,7 +1390,7 @@ def main():
     s.add_argument("--lon", type=float, default=None)
     s.add_argument("--radius", type=int, default=1500, help="范围半径（米），默认 1500")
     s.add_argument("--type", default="team-building",
-                   choices=list(BUSINESS_TYPES.keys()), help="业务类型")
+                   help="业务类型；用 `types` 看内置列表，或用 --type-file 自定义")
     s.add_argument("--max-transit", type=int, default=None, help="交通硬约束最大距离（米）")
     s.add_argument("--target-capacity", type=int, default=None, help="目标容量（人）")
     s.add_argument("--top", type=int, default=20, help="清单展示条数")
@@ -1537,6 +1418,10 @@ def main():
     s.set_defaults(func=cmd_scout)
 
     args = p.parse_args()
+    # --type-file：加载用户自定义业务类型（覆盖/扩展内置），需在 dispatch 前生效
+    if getattr(args, "type_file", None):
+        global BUSINESS_TYPES
+        BUSINESS_TYPES = load_business_types(args.type_file)
     return args.func(args)
 
 
