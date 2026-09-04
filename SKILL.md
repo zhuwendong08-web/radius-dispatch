@@ -51,11 +51,21 @@ python scripts/radius_dispatch.py isochrone \
   --origin "虎门站" --city 东莞 --minutes 20 --directions 16
 ```
 
+**直接当选址范围用**：加 `--isochrone-minutes` 到 scout，候选必须落在驾车可达范围内
+（先算等时圈 → 外接圆检索 → 多边形精确过滤）。实测 20 分钟等时圈覆盖到 5km 外的
+虎门会展中心，同时剔除 193 个"在圆内但驾车 20 分钟到不了"的场地：
+
+```bash
+python scripts/radius_dispatch.py scout \
+  --origin "虎门站" --city 东莞 \
+  --isochrone-minutes 20 --type team-building --provider amap
+```
+
 参数：`--minutes` 驾车分钟数、`--directions` 方向采样数（越多样条越圆滑、请求翻倍）、
 `--max-dist` 二分上界、`--iterations` 二分精度、`--lat/--lon` 直接给原点。
 原理：高德无公开免费等时圈 API，但个人 key 可调驾车路径规划——从原点向 N 个方向
 各做二分搜索找「恰好 minutes 分钟可达的最远点」，边界连成多边形即近似等时圈。
-产物：`isochrone.geojson` + `isochrone-map.html`。
+产物：`range.geojson`(等时圈多边形) + `map.html`(等时圈+候选点)。
 
 ### scout 参数
 

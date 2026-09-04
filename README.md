@@ -53,6 +53,8 @@ python scripts/radius_dispatch.py isochrone \
 
 高德无免费等时圈 API，但个人 key 可调驾车路径规划：向 N 个方向二分「恰好 N 分钟可达的最远点」，边界连成多边形。产物 `isochrone.geojson` + `isochrone-map.html`。
 
+**直接当选址范围**：`scout --isochrone-minutes 20` 让候选必须落在驾车 20 分钟可达范围内（先算等时圈 → 外接圆检索 → 多边形精确过滤）。
+
 ## 数据源
 
 | 数据源 | 说明 | 适用 |

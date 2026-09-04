@@ -753,7 +753,8 @@ def write_report(path, meta, rows, filtered_out):
     lines.append("# 选址候选清单 · radius-dispatch\n")
     lines.append("## 范围设定\n")
     lines.append(f"- 原点：**{meta['origin_name']}**（{meta['lat']:.6f}, {meta['lon']:.6f}）")
-    lines.append(f"- 半径：**{meta['radius']} m**（圆形范围，已输出 GeoJSON / 地图）")
+    note = meta.get("range_note") or f"半径 {meta['radius']} m 圆"
+    lines.append(f"- 范围：**{note}**（已输出 GeoJSON / 地图）")
     lines.append(f"- 业务类型：**{meta['type_label']}** — {meta['type_summary']}")
     lines.append(f"- 交通硬约束：候选点到最近交通站点 ≤ **{meta['max_transit']} m**"
                  f"（{meta.get('transit_note', '直线距离')}）")
@@ -817,8 +818,8 @@ def write_geojson(path, origin, radius):
         json.dump(gj, f, ensure_ascii=False, indent=2)
 
 
-def write_map(path, origin, radius, rows):
-    """Leaflet 可视化：范围圆 + 原点 + 候选点（按分数着色）"""
+def write_map(path, origin, radius, rows, iso_pts=None, minutes=None):
+    """Leaflet 可视化：范围(圆或等时圈多边形) + 原点 + 候选点（按分数着色）"""
     def color(s):
         if s >= 75:
             return "#16a34a"
@@ -841,6 +842,48 @@ def write_map(path, origin, radius, rows):
             "color": color(r["score"]), "popup": popup,
             "rank": r["rank"],
         })
+
+    if iso_pts:
+        # 等时圈多边形渲染
+        ring = [[round(x[1], 6), round(x[0], 6)] for x in iso_pts]
+        html = """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>radius-dispatch 等时圈选址</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>html,body,#map{height:100%;margin:0;font-family:sans-serif}</style>
+</head><body><div id="map"></div><script>
+var map=L.map('map').setView([__LAT__,__LON__],__ZOOM__);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,
+ attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+var ring=__RING__;
+L.polygon(ring,{color:'#dc2626',weight:2,fillColor:'#ef4444',fillOpacity:0.08}).addTo(map);
+L.marker([__LAT__,__LON__]).addTo(map)
+ .bindPopup('<b>__ORIGIN__</b><br>驾车 __MINUTES__ 分钟可达范围').openPopup();
+var items=__ITEMS__;
+items.forEach(function(it){
+  L.circleMarker([it.lat,it.lon],{radius:7,color:'#fff',weight:1.5,
+    fillColor:it.color,fillOpacity:0.9}).addTo(map)
+    .bindPopup(it.popup).bindTooltip(it.rank+'. '+it.name,{permanent:false});
+});
+</script></body></html>"""
+        # 用候选点算视野（让范围自适应）
+        if items:
+            lats = [origin["lat"]] + [i["lat"] for i in items]
+            lons = [origin["lon"]] + [i["lon"] for i in items]
+            zoom = 12 if (max(lons) - min(lons)) < 0.05 else 11
+        else:
+            zoom = 12
+        html = (html.replace("__LAT__", f"{origin['lat']:.6f}")
+                    .replace("__LON__", f"{origin['lon']:.6f}")
+                    .replace("__ZOOM__", str(zoom))
+                    .replace("__RING__", json.dumps(ring))
+                    .replace("__ORIGIN__", origin["name"].replace("'", "\\'"))
+                    .replace("__MINUTES__", str(minutes))
+                    .replace("__ITEMS__", json.dumps(items, ensure_ascii=False)))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html)
+        return
 
     html = """<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -975,17 +1018,47 @@ def cmd_scout(args):
     target_capacity = args.target_capacity if args.target_capacity is not None else d["target_capacity"]
     full_score_area = d["full_score_area"]
 
+    # 1.5) 等时圈模式：--isochrone-minutes 设置时，范围改用驾车分钟数。
+    # 生成等时圈多边形，POI 检索半径取它的外接圆（高德单次周边搜索上限内），
+    # 候选再按「是否落在多边形内」过滤 → 得到真实驾车可达范围内的场地。
+    iso_pts = None
+    if getattr(args, "isochrone_minutes", None):
+        if provider != "amap":
+            print("错误：--isochrone-minutes 依赖高德驾车规划，需 --provider amap 且提供 key。")
+            return 1
+        print(f"[1.5/6] 正在生成驾车 {args.isochrone_minutes} 分钟等时圈"
+              f"（{args.iso_directions} 方向二分）…")
+        iso_pts = []
+        for i in range(args.iso_directions):
+            bearing = 360.0 * i / args.iso_directions
+            iso_pts.append(_isochrone_boundary(
+                amap, origin["lat"], origin["lon"], bearing,
+                args.isochrone_minutes, args.iso_max_dist, args.iso_iterations))
+        dmax = max(haversine(origin["lat"], origin["lon"], p[0], p[1])
+                   for p in iso_pts)
+        radius = int(dmax * 1.2 + 1000)          # 外接圆做检索，多边形做过滤
+        print(f"      等时圈最远 {dmax:.0f} m；检索用外接圆 {radius} m，"
+              f"再用多边形精确过滤")
+
     # 2) 画范围
     os.makedirs(args.out_dir, exist_ok=True)
-    write_geojson(os.path.join(args.out_dir, "range.geojson"), origin, radius)
-    print(f"[2/6] 范围：半径 {radius} m 已生成 → range.geojson")
+    if iso_pts:
+        write_polygon_geojson(os.path.join(args.out_dir, "range.geojson"), origin,
+                              iso_pts, f"isochrone-{args.isochrone_minutes}min",
+                              minutes=args.isochrone_minutes)
+        print(f"[2/6] 范围：驾车 {args.isochrone_minutes} 分钟等时圈已生成 → range.geojson")
+    else:
+        write_geojson(os.path.join(args.out_dir, "range.geojson"), origin, radius)
+        print(f"[2/6] 范围：半径 {radius} m 已生成 → range.geojson")
 
     # 3) 捞 POI
     if provider == "amap":
         kws = cfg.get("amap_keywords", []) or cfg.get("name_keywords", [])
         print(f"[3/6] 正在高德周边搜索候选场地（关键词 {len(kws)} 个）…")
         try:
-            cands = amap.search_in_radius(origin["lat"], origin["lon"], radius, kws)
+            cands = amap.search_in_radius(
+                origin["lat"], origin["lon"], radius, kws,
+                limit=500 if iso_pts else 200)   # 等时圈外接圆大，放宽截断
         except Exception as e:
             print(f"\n高德周边搜索失败：{e}")
             return 1
@@ -1001,6 +1074,18 @@ def cmd_scout(args):
             return 1
         cands = parse_elements(data.get("elements", []))
         print(f"      检索到 {len(cands)} 个候选")
+
+    # 3.5) 等时圈模式：候选必须落在等时圈多边形内（外接圆只是检索用的超集）
+    if iso_pts:
+        inside, outside = [], []
+        for c in cands:
+            (inside if point_in_polygon(c["lat"], c["lon"], iso_pts)
+             else outside).append(c)
+        print(f"      等时圈内候选 {len(inside)} 个，多边形外剔除 {len(outside)} 个")
+        cands = inside
+        if not cands:
+            print("      ⚠ 等时圈内没有候选场地。可加大 --minutes 或换关键词。")
+            return 1
 
     # 4) 交通点
     if provider == "amap":
@@ -1086,11 +1171,14 @@ def cmd_scout(args):
             "type_summary": cfg["summary"], "max_transit": max_transit,
             "target_capacity": target_capacity, "total": len(cands),
             "passed": len(passed),
+            "range_note": (f"驾车 {args.isochrone_minutes} 分钟等时圈"
+                           if iso_pts else f"半径 {radius} m 圆"),
             "transit_note": ("真实步行路网距离" if (provider == "amap" and not args.no_walk)
                              else "直线距离")}
     write_report(out_md, meta, rows, failed)
     if not args.no_map:
-        write_map(os.path.join(args.out_dir, "map.html"), origin, radius, rows)
+        write_map(os.path.join(args.out_dir, "map.html"), origin, radius, rows,
+                  iso_pts=iso_pts, minutes=getattr(args, "isochrone_minutes", None))
     print(f"[6/6] 产物已写入 {os.path.abspath(args.out_dir)}")
 
     # 控制台摘要
@@ -1161,6 +1249,38 @@ def _isochrone_boundary(amap, lat, lon, bearing, minutes,
         else:
             hi = mid
     return _point_at(lat, lon, bearing, lo)
+
+
+def point_in_polygon(lat, lon, poly):
+    """射线法判断点 (lat,lon) 是否在多边形内。poly: [(lat,lon),...]。
+    几十 km 范围内用经纬度平面近似足够（等时圈边界点密度 16/圈）。"""
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        lat1, lon1 = poly[i]
+        lat2, lon2 = poly[(i + 1) % n]
+        if (lon1 > lon) != (lon2 > lon):          # 射线穿越该边
+            x_inter = lat1 + (lon - lon1) / (lon2 - lon1) * (lat2 - lat1)
+            if lat < x_inter:
+                inside = not inside
+    return inside
+
+
+def write_polygon_geojson(path, origin, pts, name, minutes=None):
+    """把等时圈边界点写成 GeoJSON（WGS84，与地图一致）。pts: [(lat,lon),...]"""
+    ring = [[round(x[1], 6), round(x[0], 6)] for x in pts]
+    ring.append(ring[0])
+    props = {"name": name, "origin": origin["name"]}
+    if minutes is not None:
+        props["minutes"] = minutes
+    gj = {"type": "FeatureCollection", "features": [{
+        "type": "Feature", "properties": props,
+        "geometry": {"type": "Polygon", "coordinates": [ring]}}, {
+        "type": "Feature", "properties": {"name": origin["name"], "role": "origin"},
+        "geometry": {"type": "Point",
+                     "coordinates": [origin["lon"], origin["lat"]]}}]}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(gj, f, ensure_ascii=False, indent=2)
 
 
 def write_isochrone_map(path, origin, minutes, pts):
@@ -1303,6 +1423,14 @@ def main():
     s.add_argument("--no-map", action="store_true", help="不生成 HTML 地图")
     s.add_argument("--no-walk", action="store_true",
                    help="高德数据源下跳过真实步行距离计算（用直线距离），用于对比")
+    s.add_argument("--isochrone-minutes", type=int, default=None,
+                   help="以驾车 N 分钟等时圈为范围（替代半径圆）筛场地，需高德 key")
+    s.add_argument("--iso-directions", type=int, default=16,
+                   help="等时圈方向采样数，默认 16")
+    s.add_argument("--iso-max-dist", type=int, default=60000,
+                   help="等时圈单方向二分上界（米），默认 60000")
+    s.add_argument("--iso-iterations", type=int, default=10,
+                   help="等时圈每方向二分迭代，默认 10")
     s.add_argument("--provider", default="auto", choices=["auto", "osm", "amap"],
                    help="数据源：auto(有 key 用高德，否则 OSM) / osm / amap。默认 auto")
     s.add_argument("--key", default=None,
