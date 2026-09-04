@@ -96,17 +96,21 @@ def _types_json_path():
 
 def load_business_types(extra_file=None):
     """加载内置 config/business_types.json，并用可选 extra_file 覆盖/扩展。
-    内置文件缺失时报错（配置是运行必需，静默空跑比报错更糟）。"""
+    内置文件缺失时报错（配置是运行必需，静默空跑比报错更糟）。
+    顶层以 _ 开头的键按「注释键」跳过（如示例文件的 _说明），不当业务类型。"""
+    def _strip_comment_keys(d):
+        return {k: v for k, v in d.items() if not k.startswith("_")}
+
     data = {}
     p = _types_json_path()
     if not os.path.exists(p):
         raise RuntimeError("找不到业务类型配置：" + p
                            + "。技能包需包含 config/business_types.json。")
     with open(p, encoding="utf-8") as f:
-        data = json.load(f)
+        data = _strip_comment_keys(json.load(f))
     if extra_file:
         with open(extra_file, encoding="utf-8") as f:
-            extra = json.load(f)
+            extra = _strip_comment_keys(json.load(f))
         for k, v in extra.items():
             data[k] = v          # 同 key 覆盖，新 key 新增
         print(f"[配置] 已加载自定义类型文件 {extra_file}（共 {len(data)} 类）")

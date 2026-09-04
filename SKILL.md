@@ -111,8 +111,8 @@ python scripts/radius_dispatch.py scout \
 
 扩展新类型：**不用改代码**——业务配置真源在 `config/business_types.json`，
 每套 = OSM 标签 + 高德关键词 + 四项权重 + 适配度规则 + 默认硬约束。
-加 `--type-file <json>` 可加载自定义类型（覆盖/扩展内置）。示例见 `references/business-types.md`。
-（内置配置调整也直接改 JSON 文件即可，已入库随仓库分发。）
+加 `--type-file <json>` 可加载自定义类型（覆盖/扩展内置）；`config/example_custom_types.json`
+是可直接运行的示例（充电站选址）。示例见 `references/business-types.md`。
 
 ## 使用建议
 

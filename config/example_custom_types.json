@@ -1,0 +1,32 @@
+{
+  "_说明": "自定义业务类型示例。用法：python radius_dispatch.py --type-file config/example_custom_types.json scout --origin ... --type ev-station ... 复制本文件改即可；同 key 会覆盖内置类型。完整字段说明见 references/business-types.md。",
+
+  "ev-station": {
+    "label": "充电站选址",
+    "summary": "示例自定义类型：重路网与场地面积、人群密集；对公交站点距离不敏感（此维度仅供参考）。",
+    "osm_tags": {
+      "amenity": ["charging_station"],
+      "building": ["service"]
+    },
+    "name_keywords": ["充电站", "充电桩", "超充站"],
+    "amap_keywords": ["充电站", "充电桩", "充电服务", "超级充电站", "换电站", "特来电", "星星充电", "小桔充电", "蔚来充换电"],
+    "weights": {"transit": 0.1, "suitability": 0.6, "size": 0.2, "capacity": 0.1},
+    "suitability": {
+      "_提示": "词表要覆盖业态的真实命名习惯——充电站多含品牌名(特来电/星星/小桔/蔚来)，只有「充电站」三字会漏召回。",
+      "small_venue": [],
+      "small_venue_score": 55,
+      "strong": {
+        "充电站": 95, "超充站": 97, "换电站": 95, "充电服务": 90,
+        "特来电": 92, "星星充电": 92, "小桔充电": 92, "蔚来": 88,
+        "开迈斯": 92, "国网": 88, "南网": 88
+      },
+      "medium": {"充电": 85, "桩": 70, "补能": 85, "充电场站": 95},
+      "weak": {},
+      "category": {"充电站": 95, "加油站": 60},
+      "noise": ["手机充电", "充电宝", "维修"],
+      "noise_score": 10,
+      "default": 40
+    },
+    "defaults": {"max_transit_distance": 3000, "target_capacity": 0, "full_score_area": 2000}
+  }
+}
